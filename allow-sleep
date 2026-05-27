@@ -1,0 +1,34 @@
+#!/bin/bash
+# Inverso de stay-awake: mata el caffeinate para que la MacBook M
+# pueda volver a dormir al cerrar la tapa.
+#
+# No revierte los ajustes pmset (powernap=0, tcpkeepalive=1, womp=1)
+# porque son inocuos para sleep normal y conviene tenerlos siempre.
+# Si querés revertirlos, mirá la sección al final de este script.
+
+set -e
+
+PIDFILE="$HOME/.cache/stay-awake.pid"
+
+if [ ! -f "$PIDFILE" ]; then
+  echo "stay-awake no estaba activo (no hay pidfile)"
+  # Por si quedó un caffeinate huérfano de otra sesión:
+  pkill -f 'caffeinate -dimsu' 2>/dev/null && echo "Mate un caffeinate huérfano por las dudas" || true
+  exit 0
+fi
+
+pid="$(cat "$PIDFILE")"
+if kill -0 "$pid" 2>/dev/null; then
+  kill "$pid"
+  echo "caffeinate (pid $pid) detenido — la máquina puede volver a dormir"
+else
+  echo "El proceso de stay-awake (pid $pid) ya no estaba corriendo"
+fi
+rm -f "$PIDFILE"
+
+# Por si quedó algún caffeinate huérfano:
+pkill -f 'caffeinate -dimsu' 2>/dev/null && echo "Limpieza: mate otro caffeinate huérfano" || true
+
+# --- Revertir ajustes pmset (opcional, normalmente NO hace falta) ---
+# sudo pmset -a powernap 1
+# (tcpkeepalive y womp conviene dejarlos en 1)

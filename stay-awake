@@ -1,0 +1,66 @@
+#!/bin/bash
+# Mantiene la MacBook M despierta con tapa cerrada (siempre en AC).
+# Inhibe idle/system/display/disk sleep mediante caffeinate.
+# También aplica ajustes pmset para que el SSHFS al Mac Pro no se rompa
+# durante darkwakes ni power naps.
+#
+# Uso:
+#   stay-awake           # arranca caffeinate -dimsu en background
+#   stay-awake status    # informa si está activo
+#
+# Para dejar que la máquina vuelva a dormir al cerrar la tapa: allow-sleep
+
+set -e
+
+PIDFILE="$HOME/.cache/stay-awake.pid"
+mkdir -p "$(dirname "$PIDFILE")"
+
+cmd="${1:-start}"
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+case "$cmd" in
+  status)
+    if is_running; then
+      echo "stay-awake activo (caffeinate pid $(cat "$PIDFILE"))"
+      pmset -g custom | grep -E 'powernap|tcpkeepalive|sleep ' | head -10
+    else
+      echo "stay-awake no está corriendo"
+    fi
+    ;;
+  start|"")
+    if is_running; then
+      echo "Ya está corriendo (pid $(cat "$PIDFILE"))"
+      exit 0
+    fi
+
+    # Ajustes persistentes — quedan aplicados aunque allow-sleep mate caffeinate.
+    # Inocuos para sleep normal: sólo modifican comportamiento durante darkwake.
+    sudo pmset -a powernap 0 tcpkeepalive 1 womp 1
+
+    # caffeinate -dimsu:
+    #   d = no display sleep
+    #   i = no idle sleep
+    #   m = no disk sleep
+    #   s = no system sleep (sólo aplica con AC)
+    #   u = simula actividad de usuario
+    nohup caffeinate -dimsu >/dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 0.2
+    if is_running; then
+      echo "stay-awake activado (caffeinate pid $(cat "$PIDFILE"))"
+      echo "Cerrá la tapa con confianza: la máquina no va a dormir."
+      echo "Para volver a permitir sleep: allow-sleep"
+    else
+      echo "Error: caffeinate no quedó corriendo" >&2
+      rm -f "$PIDFILE"
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Uso: $0 [start|status]" >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,123 @@
+#!/bin/bash
+# Watchdog del mount ~/macpro.
+# Cada $INTERVAL segundos verifica que el mount esté sano. Si no lo está
+# (fantasma, conexión muerta, Mac Pro reapareció en la red), intenta
+# recuperarlo: force-unmount y volver a montar.
+#
+# La idea: dejarlo corriendo en background o como LaunchAgent. Cuando
+# volvés al equipo después de un rato, el mount ya se restableció solo
+# (siempre y cuando la Mac Pro esté online).
+#
+# Uso:
+#   macpro-watchdog              # corre en foreground (Ctrl+C para parar)
+#   macpro-watchdog --daemon     # corre en background, escribe pidfile
+#   macpro-watchdog status       # informa si está corriendo
+#   macpro-watchdog stop         # detiene el watchdog en background
+#   macpro-watchdog check        # corre una sola pasada y termina
+#
+# Logs: ~/.cache/macpro-watchdog.log
+# Pidfile: ~/.cache/macpro-watchdog.pid
+
+set -u
+
+MOUNT_POINT="$HOME/macpro"
+REMOTE_HOST="macpro"          # entrada de ~/.ssh/config
+INTERVAL="${MACPRO_WATCHDOG_INTERVAL:-30}"   # segundos entre checks
+LOG="$HOME/.cache/macpro-watchdog.log"
+PIDFILE="$HOME/.cache/macpro-watchdog.pid"
+mkdir -p "$(dirname "$LOG")"
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+log() { echo "[$(ts)] $*" >> "$LOG"; }
+
+is_listed()    { mount | grep -q " $MOUNT_POINT "; }
+is_healthy()   { ls "$MOUNT_POINT" >/dev/null 2>&1; }
+remote_alive() { ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_HOST" true 2>/dev/null; }
+
+check_once() {
+  if is_listed && is_healthy; then
+    return 0    # todo bien
+  fi
+
+  if is_listed && ! is_healthy; then
+    log "mount fantasma detectado, force-unmount"
+    diskutil unmount force "$MOUNT_POINT" >>"$LOG" 2>&1 \
+      || umount -f "$MOUNT_POINT" >>"$LOG" 2>&1 \
+      || log "ERROR: no pude force-unmount"
+  fi
+
+  if ! remote_alive; then
+    log "Mac Pro no responde por SSH; espero al próximo ciclo"
+    return 1
+  fi
+
+  log "Remontando..."
+  if "$HOME/bin/mount-macpro" >>"$LOG" 2>&1; then
+    log "Mount restablecido OK"
+    return 0
+  else
+    log "ERROR: mount-macpro falló"
+    return 1
+  fi
+}
+
+loop() {
+  log "watchdog arrancado (pid $$, interval=${INTERVAL}s)"
+  trap 'log "watchdog terminando (pid $$)"; rm -f "$PIDFILE"; exit 0' INT TERM
+  while true; do
+    check_once || true
+    sleep "$INTERVAL"
+  done
+}
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+case "${1:-foreground}" in
+  check)
+    check_once
+    ;;
+  status)
+    if is_running; then
+      echo "watchdog corriendo (pid $(cat "$PIDFILE"))"
+      tail -5 "$LOG" 2>/dev/null
+    else
+      echo "watchdog NO está corriendo"
+    fi
+    ;;
+  stop)
+    if is_running; then
+      pid="$(cat "$PIDFILE")"
+      kill "$pid" && echo "watchdog (pid $pid) detenido"
+      rm -f "$PIDFILE"
+    else
+      echo "No estaba corriendo"
+      rm -f "$PIDFILE"
+    fi
+    ;;
+  --daemon|daemon)
+    if is_running; then
+      echo "Ya está corriendo (pid $(cat "$PIDFILE"))"
+      exit 0
+    fi
+    nohup "$0" foreground >>"$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 0.2
+    if is_running; then
+      echo "watchdog arrancado en background (pid $(cat "$PIDFILE"))"
+      echo "Log: $LOG"
+    else
+      echo "ERROR: no quedó corriendo" >&2
+      rm -f "$PIDFILE"
+      exit 1
+    fi
+    ;;
+  foreground|"")
+    loop
+    ;;
+  *)
+    echo "Uso: $0 [check|status|stop|--daemon|foreground]" >&2
+    exit 2
+    ;;
+esac

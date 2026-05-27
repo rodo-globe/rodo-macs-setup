@@ -1,0 +1,48 @@
+#!/bin/bash
+# Monta el filesystem del Mac Pro en ~/macpro.
+# Si detecta un mount fantasma (existe en 'mount' pero ls falla),
+# fuerza el unmount y vuelve a montar.
+
+MOUNT_POINT="$HOME/macpro"
+REMOTE="macpro:/Users/rodo"
+
+is_mount_listed() {
+  mount | grep -q " $MOUNT_POINT "
+}
+
+is_mount_healthy() {
+  # 'ls' rápido; si falla es zombie
+  ls "$MOUNT_POINT" >/dev/null 2>&1
+}
+
+if is_mount_listed; then
+  if is_mount_healthy; then
+    echo "Ya montado y sano en $MOUNT_POINT"
+    exit 0
+  fi
+  echo "Mount fantasma detectado, forzando unmount..."
+  diskutil unmount force "$MOUNT_POINT" >/dev/null 2>&1 || umount -f "$MOUNT_POINT" 2>/dev/null || true
+fi
+
+mkdir -p "$MOUNT_POINT"
+
+# Opciones SSH explícitas en el sshfs (no se heredan siempre de ~/.ssh/config
+# cuando sshfs invoca ssh con flags propios). Keepalive corto para que las
+# conexiones muertas mueran rápido en vez de quedar colgadas.
+sshfs "$REMOTE" "$MOUNT_POINT" \
+  -o reconnect \
+  -o defer_permissions \
+  -o noappledouble \
+  -o auto_cache,kernel_cache \
+  -o IdentityFile="$HOME/.ssh/id_macpro" \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o ConnectTimeout=10 \
+  -o volname=MacPro
+
+if [ $? -eq 0 ]; then
+  echo "Montado: $MOUNT_POINT"
+else
+  echo "Error al montar" >&2
+  exit 1
+fi
