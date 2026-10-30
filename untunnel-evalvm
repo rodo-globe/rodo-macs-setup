@@ -1,0 +1,14 @@
+#!/bin/bash
+# Cierra el túnel SSH hacia el RDP de EVALVM abierto con tunnel-evalvm.
+
+CONTROL_SOCKET="$HOME/.ssh/tunnel-evalvm.sock"
+
+if [ ! -S "$CONTROL_SOCKET" ]; then
+  echo "No hay túnel abierto"
+  exit 0
+fi
+
+# El host es indiferente para -O exit: se usa el del socket de control
+ssh -S "$CONTROL_SOCKET" -O exit macpro >/dev/null 2>&1
+rm -f "$CONTROL_SOCKET"
+echo "Túnel cerrado"

@@ -1,0 +1,40 @@
+#!/bin/bash
+# Abre un túnel SSH a través del Mac Pro hacia el escritorio remoto (RDP)
+# de la VM de evaluación EVALVM, que vive en la red NAT de libvirt.
+# Luego conectar Windows App a localhost:13389.
+#
+# Uso:
+#   tunnel-evalvm        → modo LAN, alias 'macpro' (mDNS macpro.local)
+#   tunnel-evalvm -vpn   → modo VPN, alias 'macpro-vpn' (IP, .local no rutea por VPN)
+
+LOCAL_PORT=13389
+VM_IP="192.168.122.6"
+CONTROL_SOCKET="$HOME/.ssh/tunnel-evalvm.sock"
+
+REMOTE_HOST="macpro"
+if [ "$1" = "-vpn" ]; then
+  REMOTE_HOST="macpro-vpn"
+fi
+
+if ssh -S "$CONTROL_SOCKET" -O check "$REMOTE_HOST" >/dev/null 2>&1; then
+  echo "El túnel ya está abierto: localhost:$LOCAL_PORT → $VM_IP:3389"
+  exit 0
+fi
+
+# Socket huérfano de una sesión anterior que murió
+rm -f "$CONTROL_SOCKET"
+
+ssh -f -N -M -S "$CONTROL_SOCKET" \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o ConnectTimeout=10 \
+  -L "127.0.0.1:$LOCAL_PORT:$VM_IP:3389" \
+  "$REMOTE_HOST"
+
+if [ $? -eq 0 ]; then
+  echo "Túnel abierto vía $REMOTE_HOST: conectar Windows App a localhost:$LOCAL_PORT"
+else
+  echo "Error al abrir el túnel (¿puerto $LOCAL_PORT ocupado o $REMOTE_HOST inaccesible?)" >&2
+  exit 1
+fi

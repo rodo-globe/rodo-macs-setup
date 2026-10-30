@@ -1,0 +1,53 @@
+#!/bin/bash
+# Devuelve la VM de evaluación EVALVM a la base limpia: apaga la VM, descarta
+# el disco de trabajo (todos los cambios desde la base) y crea uno vacío sobre
+# la imagen base. Se usa antes de evaluar cada entrega.
+#
+# Uso:
+#   reset-evalvm        → modo LAN, alias 'macpro' (mDNS macpro.local)
+#   reset-evalvm -vpn   → modo VPN, alias 'macpro-vpn' (IP, .local no rutea por VPN)
+
+REMOTE_HOST="macpro"
+if [ "$1" = "-vpn" ]; then
+  REMOTE_HOST="macpro-vpn"
+fi
+
+ssh -o BatchMode=yes "$REMOTE_HOST" 'bash -s' <<'EOF'
+set -e
+export LIBVIRT_DEFAULT_URI=qemu:///system
+VM=eval-win2022
+BASE=eval-win2022.qcow2
+TRABAJO=eval-win2022-trabajo.qcow2
+
+if [ "$(virsh domstate $VM)" != "shut off" ]; then
+  echo "Apagando $VM..."
+  virsh shutdown $VM --mode agent >/dev/null 2>&1 || virsh shutdown $VM >/dev/null
+  for i in $(seq 1 36); do
+    [ "$(virsh domstate $VM)" = "shut off" ] && break
+    sleep 5
+  done
+  if [ "$(virsh domstate $VM)" != "shut off" ]; then
+    echo "No se apagó en 3 minutos, forzando apagado"
+    virsh destroy $VM >/dev/null
+  fi
+fi
+
+echo "Descartando disco de trabajo y creando uno nuevo sobre la base..."
+virsh vol-delete --pool default $TRABAJO >/dev/null
+virsh vol-create-as default $TRABAJO 150G --format qcow2 \
+  --backing-vol $BASE --backing-vol-format qcow2 >/dev/null
+
+virsh start $VM >/dev/null
+echo "Esperando que Windows arranque..."
+for i in $(seq 1 60); do
+  virsh qemu-agent-command $VM '{"execute":"guest-ping"}' >/dev/null 2>&1 && break
+  sleep 5
+done
+EOF
+
+if [ $? -eq 0 ]; then
+  echo "EVALVM restaurada a la base limpia"
+else
+  echo "Error al restaurar EVALVM" >&2
+  exit 1
+fi
