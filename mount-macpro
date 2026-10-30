@@ -2,9 +2,18 @@
 # Monta el filesystem del Mac Pro en ~/macpro.
 # Si detecta un mount fantasma (existe en 'mount' pero ls falla),
 # fuerza el unmount y vuelve a montar.
+#
+# Uso:
+#   mount-macpro        → modo LAN, alias 'macpro' (mDNS macpro.local)
+#   mount-macpro -vpn   → modo VPN, alias 'macpro-vpn' (IP, .local no rutea por VPN)
 
 MOUNT_POINT="$HOME/macpro"
-REMOTE="macpro:/Users/rodo"
+
+REMOTE_HOST="macpro"
+if [ "$1" = "-vpn" ]; then
+  REMOTE_HOST="macpro-vpn"
+fi
+REMOTE="$REMOTE_HOST:/home/rodo"
 
 is_mount_listed() {
   mount | grep -q " $MOUNT_POINT "
