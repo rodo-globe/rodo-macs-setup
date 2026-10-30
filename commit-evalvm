@@ -1,0 +1,61 @@
+#!/bin/bash
+# Consolida en la imagen base de EVALVM los cambios hechos en el disco de
+# trabajo (instalaciones, configuración, actualizaciones), para que sobrevivan
+# a reset-evalvm. Deja la VM corriendo sobre un disco de trabajo nuevo y vacío.
+#
+# Antes de ejecutarlo, verificar que la VM no tenga restos de una evaluación:
+# todo lo que haya en el disco de trabajo pasa a formar parte de la base.
+#
+# Uso:
+#   commit-evalvm        → modo LAN, alias 'macpro' (mDNS macpro.local)
+#   commit-evalvm -vpn   → modo VPN, alias 'macpro-vpn' (IP, .local no rutea por VPN)
+
+REMOTE_HOST="macpro"
+if [ "$1" = "-vpn" ]; then
+  REMOTE_HOST="macpro-vpn"
+fi
+
+ssh -o BatchMode=yes "$REMOTE_HOST" 'bash -s' <<'EOF'
+set -e
+export LIBVIRT_DEFAULT_URI=qemu:///system
+VM=eval-win2022
+DIR=/var/lib/libvirt/images
+BASE=eval-win2022.qcow2
+TRABAJO=eval-win2022-trabajo.qcow2
+
+# blockcommit necesita la VM encendida: copia el contenido del disco de
+# trabajo dentro de la base y pasa la VM a usar la base directamente
+if [ "$(virsh domstate $VM)" != "running" ]; then
+  virsh start $VM >/dev/null
+  sleep 20
+fi
+echo "Consolidando el disco de trabajo en la imagen base..."
+virsh blockcommit $VM vda --active --pivot --wait >/dev/null
+
+echo "Apagando $VM..."
+virsh shutdown $VM --mode agent >/dev/null 2>&1 || virsh shutdown $VM >/dev/null
+for i in $(seq 1 36); do
+  [ "$(virsh domstate $VM)" = "shut off" ] && break
+  sleep 5
+done
+[ "$(virsh domstate $VM)" = "shut off" ] || virsh destroy $VM >/dev/null
+
+echo "Creando un disco de trabajo nuevo sobre la base..."
+virsh vol-delete --pool default $TRABAJO >/dev/null 2>&1 || true
+virsh vol-create-as default $TRABAJO 150G --format qcow2 \
+  --backing-vol $BASE --backing-vol-format qcow2 >/dev/null
+virt-xml $VM --edit target=vda --disk path=$DIR/$TRABAJO,driver.type=qcow2 >/dev/null
+
+virsh start $VM >/dev/null
+for i in $(seq 1 60); do
+  virsh qemu-agent-command $VM '{"execute":"guest-ping"}' >/dev/null 2>&1 && break
+  sleep 5
+done
+EOF
+
+if [ $? -eq 0 ]; then
+  echo "Cambios consolidados en la base de EVALVM"
+else
+  echo "Error al consolidar EVALVM" >&2
+  exit 1
+fi
