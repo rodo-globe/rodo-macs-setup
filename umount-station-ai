@@ -1,0 +1,23 @@
+#!/bin/bash
+# Desmonta ~/station-ai. Si el unmount normal falla (mount fantasma),
+# intenta diskutil unmount force.
+
+MOUNT_POINT="$HOME/station-ai"
+
+if ! mount | grep -q " $MOUNT_POINT "; then
+  echo "No estaba montado"
+  exit 0
+fi
+
+if umount "$MOUNT_POINT" 2>/dev/null; then
+  echo "Desmontado: $MOUNT_POINT"
+  exit 0
+fi
+
+echo "Unmount normal falló, forzando..."
+if diskutil unmount force "$MOUNT_POINT"; then
+  echo "Desmontado (forzado): $MOUNT_POINT"
+else
+  echo "Error: no se pudo desmontar" >&2
+  exit 1
+fi
